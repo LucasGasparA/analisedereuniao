@@ -1,7 +1,7 @@
-import os, sqlite3, secrets, hashlib, hmac, json, threading, subprocess, shutil, uuid, time
+import os, sqlite3, secrets, hashlib, hmac, json, threading, queue, uuid, time
 from pathlib import Path
 from datetime import datetime
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -20,7 +20,35 @@ TRANSCRIBE_ENABLED = os.getenv('TRANSCRIBE_ENABLED', '0') == '1'
 MAX_UPLOAD_MB = int(os.getenv('MAX_UPLOAD_MB', '0'))
 MAX_UPLOAD = MAX_UPLOAD_MB * 1024 * 1024 if MAX_UPLOAD_MB > 0 else None
 MEDIA_SUFFIXES = ('.mp4','.mp3','.m4a','.wav','.mov')
-TRANSCODE_SEMAPHORE = threading.Semaphore(1)
+TRANSCRIPTION_PROFILES = {
+    'rapido': {
+        'label':'Rápido',
+        'description':'Prioriza velocidade para rascunhos',
+        'model':os.getenv('WHISPER_FAST_MODEL','small'),
+        'beam_size':1,
+    },
+    'equilibrado': {
+        'label':'Equilibrado',
+        'description':'Boa precisão com tempo moderado',
+        'model':os.getenv('WHISPER_BALANCED_MODEL','small'),
+        'beam_size':5,
+    },
+    'preciso': {
+        'label':'Preciso',
+        'description':'Mais qualidade, usando mais tempo e memória',
+        'model':os.getenv('WHISPER_PRECISE_MODEL','medium'),
+        'beam_size':5,
+    },
+}
+DEFAULT_TRANSCRIPTION_PROFILE = os.getenv('WHISPER_DEFAULT_PROFILE','equilibrado')
+if DEFAULT_TRANSCRIPTION_PROFILE not in TRANSCRIPTION_PROFILES:
+    DEFAULT_TRANSCRIPTION_PROFILE = 'equilibrado'
+TRANSCRIPTION_QUEUE = queue.Queue()
+TRANSCRIPTION_WORKER_LOCK = threading.Lock()
+TRANSCRIPTION_WORKER_STARTED = False
+TRANSCRIPTION_MODEL_LOCK = threading.Lock()
+TRANSCRIPTION_MODEL = None
+TRANSCRIPTION_MODEL_NAME = None
 LOGIN_ATTEMPTS = {}
 LOGIN_ATTEMPTS_LOCK = threading.Lock()
 LOGIN_LIMIT = 8
@@ -41,7 +69,13 @@ if IS_RAILWAY and len(APP_SECRET) < 32:
     raise RuntimeError('APP_SECRET deve ter pelo menos 32 caracteres no Railway')
 if IS_RAILWAY and len(ADMIN_PASS) < 12:
     raise RuntimeError('ADMIN_PASSWORD deve ter pelo menos 12 caracteres no Railway')
-app = FastAPI(title='Next Fit - Desenvolvimento')
+
+@asynccontextmanager
+async def lifespan(_app):
+    start_transcription_worker()
+    yield
+
+app = FastAPI(title='Next Fit - Desenvolvimento',lifespan=lifespan)
 app.mount('/static', StaticFiles(directory=str(ROOT/'static')), name='static')
 app.add_middleware(
     SessionMiddleware,
@@ -94,7 +128,13 @@ with db() as c:
         c.execute('ALTER TABLE transcription_jobs ADD COLUMN progress INTEGER DEFAULT 0')
     if 'updated_at' not in job_columns:
         c.execute('ALTER TABLE transcription_jobs ADD COLUMN updated_at TEXT')
+    if 'profile' not in job_columns:
+        c.execute("ALTER TABLE transcription_jobs ADD COLUMN profile TEXT DEFAULT 'equilibrado'")
     c.execute("UPDATE transcription_jobs SET progress=100 WHERE status='concluido' AND COALESCE(progress,0)<100")
+    c.execute("UPDATE transcription_jobs SET profile='equilibrado' WHERE profile IS NULL OR profile='' ")
+    c.execute('CREATE INDEX IF NOT EXISTS meetings_held_at ON meetings(held_at DESC, id DESC)')
+    c.execute('CREATE INDEX IF NOT EXISTS transcription_jobs_person_created ON transcription_jobs(person_id, created_at DESC)')
+    c.execute('CREATE INDEX IF NOT EXISTS transcription_jobs_status ON transcription_jobs(status)')
 
 def authed(request):
     return request.session.get('auth') is True
@@ -150,6 +190,8 @@ def serialize_jobs(rows):
     for row in rows:
         job=dict(row)
         job['retryable']=job['status']=='erro' and job_source_path(job) is not None
+        profile=TRANSCRIPTION_PROFILES.get(job.get('profile'),TRANSCRIPTION_PROFILES['equilibrado'])
+        job['profile_label']=profile['label']
         jobs.append(job)
     return jobs
 
@@ -187,7 +229,7 @@ def dashboard(request:Request):
     protect(request)
     with db() as c:
         people=[dict(x) for x in c.execute('SELECT p.*, COUNT(m.id) as total FROM people p LEFT JOIN meetings m ON m.person_id=p.id GROUP BY p.id ORDER BY p.name')]
-        meetings=[dict(x) for x in c.execute('SELECT m.*, p.name as person FROM meetings m JOIN people p ON p.id=m.person_id ORDER BY held_at DESC, m.id DESC LIMIT 12')]
+        meetings=[dict(x) for x in c.execute('SELECT m.id,m.person_id,m.title,m.held_at,m.summary,p.name AS person FROM meetings m JOIN people p ON p.id=m.person_id ORDER BY held_at DESC,m.id DESC LIMIT 12')]
         total=c.execute('SELECT COUNT(*) FROM meetings').fetchone()[0]
     return render(request,'index.html',people=people,meetings=meetings,total=total)
 
@@ -205,9 +247,10 @@ def person_page(request:Request,person_id:int):
     with db() as c:
         person=c.execute('SELECT * FROM people WHERE id=?',(person_id,)).fetchone()
         if not person:raise HTTPException(404)
-        meetings=[dict(x) for x in c.execute('SELECT * FROM meetings WHERE person_id=? ORDER BY held_at DESC,id DESC',(person_id,))]
+        meetings=[dict(x) for x in c.execute('SELECT id,person_id,title,held_at,summary FROM meetings WHERE person_id=? ORDER BY held_at DESC,id DESC',(person_id,))]
         jobs=serialize_jobs(c.execute('SELECT * FROM transcription_jobs WHERE person_id=? ORDER BY created_at DESC LIMIT 15',(person_id,)))
-    return render(request,'person.html',person=dict(person),meetings=meetings,jobs=jobs,transcribe_enabled=TRANSCRIBE_ENABLED)
+    profiles=[{'id':key,**value} for key,value in TRANSCRIPTION_PROFILES.items()]
+    return render(request,'person.html',person=dict(person),meetings=meetings,jobs=jobs,transcribe_enabled=TRANSCRIBE_ENABLED,profiles=profiles,default_profile=DEFAULT_TRANSCRIPTION_PROFILE)
 
 @app.get('/people/{person_id}/jobs')
 def transcription_jobs(request:Request,person_id:int):
@@ -271,7 +314,22 @@ def delete_meeting(request:Request,mid:int,token:str=Form(...)):
     return RedirectResponse(f'/people/{m[0]}',303)
 
 
-def transcribe_job(job_id, source, person_id, title, held_at):
+def get_transcription_model(model_name):
+    global TRANSCRIPTION_MODEL, TRANSCRIPTION_MODEL_NAME
+    with TRANSCRIPTION_MODEL_LOCK:
+        if TRANSCRIPTION_MODEL is not None and TRANSCRIPTION_MODEL_NAME == model_name:
+            return TRANSCRIPTION_MODEL
+        from faster_whisper import WhisperModel
+        TRANSCRIPTION_MODEL = WhisperModel(
+            model_name,
+            device=os.getenv('WHISPER_DEVICE','cpu'),
+            compute_type=os.getenv('WHISPER_COMPUTE_TYPE','int8')
+        )
+        TRANSCRIPTION_MODEL_NAME = model_name
+        return TRANSCRIPTION_MODEL
+
+
+def transcribe_job(job_id):
     def update(status, detail='', progress=0, mid=None):
         with db() as c:
             c.execute(
@@ -280,73 +338,114 @@ def transcribe_job(job_id, source, person_id, title, held_at):
             )
 
     def duration_seconds(path):
-        result=subprocess.run(
-            ['ffprobe','-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',str(path)],
-            capture_output=True,text=True,check=True,timeout=60
-        )
-        return max(float(result.stdout.strip()),1.0)
+        try:
+            import av
+            with av.open(str(path)) as container:
+                if container.duration:
+                    return max(float(container.duration)/1_000_000,1.0)
+                stream=next((item for item in container.streams if item.type=='audio'),None)
+                if stream and stream.duration is not None and stream.time_base is not None:
+                    return max(float(stream.duration*stream.time_base),1.0)
+        except Exception:
+            pass
+        return 1.0
 
-    wav = UPLOADS / (job_id + '.work.wav')
+    with db() as c:
+        job=c.execute('SELECT * FROM transcription_jobs WHERE id=?',(job_id,)).fetchone()
+    if not job:
+        return
+    source=job_source_path(job)
+    if source is None:
+        update('erro','O arquivo original não está mais disponível. Selecione-o novamente.',0)
+        return
+    person_id=job['person_id'];title=job['title'];held_at=job['held_at']
+    profile_id=job['profile'] if job['profile'] in TRANSCRIPTION_PROFILES else 'equilibrado'
+    profile=TRANSCRIPTION_PROFILES[profile_id]
     completed=False
     try:
-        with TRANSCODE_SEMAPHORE:
-            update('processando', 'Preparando o arquivo de mídia', 5)
-            if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
-                raise RuntimeError('FFmpeg nao encontrado. Execute INSTALAR_TUDO.bat e reinicie a aplicacao.')
-            media_duration=duration_seconds(source)
-            update('processando', 'Extraindo e preparando o áudio', 8)
-            command=['ffmpeg','-nostdin','-y','-loglevel','error','-i',str(source),'-vn','-ac','1','-ar','16000','-c:a','pcm_s16le','-progress','pipe:1','-nostats',str(wav)]
-            process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8',errors='replace')
-            last_progress=-1
-            assert process.stdout is not None
-            for output in process.stdout:
-                if output.startswith('out_time_ms='):
-                    try:
-                        seconds=int(output.split('=',1)[1].strip())/1_000_000
-                        progress=8+int(min(seconds/media_duration,1)*17)
-                        if progress>last_progress:
-                            update('processando', f'Extraindo áudio • {min(seconds/media_duration,1)*100:.0f}% concluído', progress)
-                            last_progress=progress
-                    except ValueError:
-                        pass
-            stderr=process.stderr.read() if process.stderr else ''
-            if process.wait()!=0:
-                raise RuntimeError(stderr.strip() or 'Falha ao extrair o áudio')
-
-            update('processando', 'Carregando o modelo de transcrição', 27)
-            from faster_whisper import WhisperModel
-            model = WhisperModel(os.getenv('WHISPER_MODEL','small'),device='cpu',compute_type='int8')
-            update('processando', 'Transcrevendo as falas', 30)
-            segments,info = model.transcribe(str(wav),language='pt',vad_filter=True,beam_size=5)
-            def fmt(t):
-                t=int(t)
-                return f'{t//3600:02}:{(t%3600)//60:02}:{t%60:02}'
-            lines=[]
-            transcript_duration=max(float(getattr(info,'duration',media_duration) or media_duration),1.0)
-            last_progress=29
-            for seg in segments:
-                if seg.text.strip():
-                    lines.append(f'[{fmt(seg.start)} - {fmt(seg.end)}] {seg.text.strip()}')
-                progress=30+int(min(seg.end/transcript_duration,1)*65)
-                if progress>last_progress:
-                    update('processando', f'Transcrevendo • {fmt(seg.end)} de {fmt(transcript_duration)} processados', progress)
-                    last_progress=progress
-            if not lines: raise RuntimeError('Nenhuma fala identificada no arquivo.')
-            update('processando', 'Finalizando e salvando a transcrição', 97)
-            transcript='\n\n'.join(lines)
-            with db() as c:
-                mid=c.execute('INSERT INTO meetings(person_id,title,held_at,transcript) VALUES(?,?,?,?)',(person_id,title,held_at,transcript)).lastrowid
-            update('concluido','Transcrição concluída',100,mid)
-            completed=True
+        media_duration=duration_seconds(source)
+        update('processando',f'Carregando perfil {profile["label"]}',8)
+        model=get_transcription_model(profile['model'])
+        update('processando','Transcrevendo as falas diretamente do arquivo',12)
+        segments,info=model.transcribe(
+            str(source),
+            language='pt',
+            vad_filter=True,
+            beam_size=profile['beam_size']
+        )
+        def fmt(t):
+            t=int(t)
+            return f'{t//3600:02}:{(t%3600)//60:02}:{t%60:02}'
+        lines=[]
+        transcript_duration=max(float(getattr(info,'duration',media_duration) or media_duration),1.0)
+        last_progress=11
+        for seg in segments:
+            if seg.text.strip():
+                lines.append(f'[{fmt(seg.start)} - {fmt(seg.end)}] {seg.text.strip()}')
+            progress=12+int(min(seg.end/transcript_duration,1)*83)
+            if progress>last_progress:
+                update('processando',f'Transcrevendo • {fmt(seg.end)} de {fmt(transcript_duration)} processados',progress)
+                last_progress=progress
+        if not lines:
+            raise RuntimeError('Nenhuma fala identificada no arquivo.')
+        update('processando','Finalizando e salvando a transcrição',97)
+        transcript='\n\n'.join(lines)
+        with db() as c:
+            mid=c.execute('INSERT INTO meetings(person_id,title,held_at,transcript) VALUES(?,?,?,?)',(person_id,title,held_at,transcript)).lastrowid
+            c.execute(
+                "UPDATE transcription_jobs SET status='concluido',detail='Transcrição concluída',progress=100,meeting_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (mid,job_id)
+            )
+        completed=True
     except Exception as e:
         update('erro', f'{type(e).__name__}: {e}',0)
     finally:
-        wav.unlink(missing_ok=True)
         if completed:
             source.unlink(missing_ok=True)
 
-def start_transcription_thread(job_id,source,person_id,title,held_at):
-    threading.Thread(target=transcribe_job,args=(job_id,source,person_id,title,held_at),daemon=True).start()
+def transcription_worker():
+    while True:
+        job_id=TRANSCRIPTION_QUEUE.get()
+        try:
+            transcribe_job(job_id)
+        except Exception as e:
+            try:
+                with db() as c:
+                    c.execute(
+                        "UPDATE transcription_jobs SET status='erro',detail=?,progress=0,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (f'{type(e).__name__}: {e}'[:900],job_id)
+                    )
+            except Exception:
+                pass
+        finally:
+            TRANSCRIPTION_QUEUE.task_done()
+
+def enqueue_transcription(job_id):
+    TRANSCRIPTION_QUEUE.put(job_id)
+
+def start_transcription_worker():
+    global TRANSCRIPTION_WORKER_STARTED
+    if not TRANSCRIBE_ENABLED:
+        return
+    with TRANSCRIPTION_WORKER_LOCK:
+        if TRANSCRIPTION_WORKER_STARTED:
+            return
+        TRANSCRIPTION_WORKER_STARTED=True
+        threading.Thread(target=transcription_worker,name='transcription-worker',daemon=True).start()
+    with db() as c:
+        pending=list(c.execute("SELECT * FROM transcription_jobs WHERE status IN ('na_fila','processando') ORDER BY created_at,id"))
+        for job in pending:
+            if job_source_path(job) is None:
+                c.execute(
+                    "UPDATE transcription_jobs SET status='erro',detail='Arquivo original indisponível após reinício',progress=0,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (job['id'],)
+                )
+            else:
+                c.execute(
+                    "UPDATE transcription_jobs SET status='na_fila',detail='Retomado após reinício da aplicação',progress=2,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (job['id'],)
+                )
+                enqueue_transcription(job['id'])
 
 @app.post('/transcription-jobs/{job_id}/retry')
 def retry_transcription(request:Request,job_id:str,token:str=Form(...)):
@@ -368,20 +467,21 @@ def retry_transcription(request:Request,job_id:str,token:str=Form(...)):
         ).rowcount
         if changed!=1:
             raise HTTPException(409,'Este processamento já foi reiniciado.')
-        person_id=job['person_id'];title=job['title'];held_at=job['held_at']
-    start_transcription_thread(job_id,source,person_id,title,held_at)
+        person_id=job['person_id']
+    enqueue_transcription(job_id)
     if request.headers.get('x-requested-with') == 'XMLHttpRequest':
         return JSONResponse({'ok':True,'job_id':job_id},status_code=202)
     return RedirectResponse(f'/people/{person_id}',303)
 
 @app.post('/people/{person_id}/upload-media')
-async def upload_media(request:Request,person_id:int,title:str=Form(...),held_at:str=Form(...),media:UploadFile=File(...),token:str=Form(...)):
+async def upload_media(request:Request,person_id:int,title:str=Form(...),held_at:str=Form(...),profile:str=Form(DEFAULT_TRANSCRIPTION_PROFILE),media:UploadFile=File(...),token:str=Form(...)):
     protect(request);csrf(request,token)
     if not TRANSCRIBE_ENABLED:
-        raise HTTPException(400,'Transcricao de MP4 nao habilitada neste servidor. Execute a versao local ou habilite TRANSCRIBE_ENABLED=1 com faster-whisper e FFmpeg instalados.')
+        raise HTTPException(400,'Transcrição de mídia não habilitada neste servidor. Execute a versão local ou habilite TRANSCRIBE_ENABLED=1 com faster-whisper instalado.')
     if not media.filename or Path(media.filename).suffix.lower() not in MEDIA_SUFFIXES:
         raise HTTPException(400,'Formato invalido. Use MP4, MP3, M4A, WAV ou MOV.')
     if not title.strip() or len(title)>200:raise HTTPException(400,'Titulo invalido')
+    if profile not in TRANSCRIPTION_PROFILES:raise HTTPException(400,'Perfil de transcrição inválido')
     with db() as c:
         if not c.execute('SELECT 1 FROM people WHERE id=?',(person_id,)).fetchone():raise HTTPException(404)
     job_id=uuid.uuid4().hex
@@ -398,14 +498,32 @@ async def upload_media(request:Request,person_id:int,title:str=Form(...),held_at
                 f.write(chunk)
         if not total:raise HTTPException(400,'Arquivo vazio')
         with db() as c:
-            c.execute('INSERT INTO transcription_jobs(id,person_id,title,held_at,filename,status,detail,progress,updated_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)', (job_id,person_id,title.strip(),held_at,Path(media.filename).name[:200],'na_fila','Aguardando processamento',2))
-        start_transcription_thread(job_id,dest,person_id,title.strip(),held_at)
+            c.execute('INSERT INTO transcription_jobs(id,person_id,title,held_at,filename,status,detail,progress,profile,updated_at) VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)', (job_id,person_id,title.strip(),held_at,Path(media.filename).name[:200],'na_fila','Aguardando processamento',2,profile))
+        enqueue_transcription(job_id)
     except Exception:
         dest.unlink(missing_ok=True)
         raise
     if request.headers.get('x-requested-with') == 'XMLHttpRequest':
         return JSONResponse({'ok':True,'job_id':job_id},status_code=202)
     return RedirectResponse(f'/people/{person_id}',303)
+
+@app.get('/meetings/{mid}/gpt')
+def export_for_gpt(request:Request,mid:int):
+    protect(request)
+    with db() as c:
+        m=c.execute('SELECT m.title,m.held_at,m.transcript,p.name AS person FROM meetings m JOIN people p ON p.id=m.person_id WHERE m.id=?',(mid,)).fetchone()
+    if not m:raise HTTPException(404)
+    title=str(m['title']).replace('\r',' ').replace('\n',' ').strip()
+    person=str(m['person']).replace('\r',' ').replace('\n',' ').strip()
+    content=(
+        f'# Transcrição de reunião\n\n'
+        f'- **Liderado:** {person}\n'
+        f'- **Reunião:** {title}\n'
+        f'- **Data:** {m["held_at"]}\n'
+        f'- **Idioma:** Português do Brasil\n\n'
+        f'## Transcrição\n\n{m["transcript"]}\n'
+    )
+    return Response(content,media_type='text/markdown; charset=utf-8',headers={'Content-Disposition':f'attachment; filename="reuniao-{mid}-para-gpt.md"'})
 
 @app.get('/meetings/{mid}/transcript')
 def export_transcript(request:Request,mid:int):

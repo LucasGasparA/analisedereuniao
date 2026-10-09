@@ -9,6 +9,7 @@
     <p class="muted">{{ m.person }} · {{ m.held_at }}</p>
   </div>
   <div class="heading-actions">
+    <a class="button secondary" href="/meetings/{{ m.id }}/gpt">Baixar para o GPT (.md)</a>
     <a class="button secondary" href="/meetings/{{ m.id }}/transcript">Baixar transcrição</a>
     <a class="button" href="/meetings/{{ m.id }}/export">Baixar relatório</a>
   </div>

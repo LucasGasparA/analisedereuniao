@@ -26,6 +26,17 @@
           <label>Título da reunião<input name="title" placeholder="Ex.: 1:1 de acompanhamento" required maxlength="200"></label>
           <label>Data<input name="held_at" type="date" required></label>
         </div>
+        <fieldset class="profile-fieldset">
+          <legend>Perfil da transcrição</legend>
+          <div class="profile-options">
+            {% for profile in profiles %}
+            <label class="profile-option">
+              <input type="radio" name="profile" value="{{ profile.id }}" {% if profile.id == default_profile %}checked{% endif %}>
+              <span><b>{{ profile.label }}</b><small>{{ profile.description }}</small></span>
+            </label>
+            {% endfor %}
+          </div>
+        </fieldset>
         <label class="file-drop" id="file-drop">
           <input id="media-file" type="file" name="media" accept=".mp4,.mp3,.m4a,.wav,.mov" required>
           <span class="upload-icon">↑</span>
@@ -53,7 +64,7 @@
         {% for j in jobs %}
         <article class="job-card status-{{ j.status }}" data-job-id="{{ j.id }}">
           <div class="job-topline">
-            <div><b>{{ j.title }}</b><small>{{ j.filename }}</small></div>
+            <div><b>{{ j.title }}</b><small>{{ j.filename }} · Perfil {{ j.profile_label }}</small></div>
             <span class="job-status">{% if j.status == 'concluido' %}Concluída{% elif j.status == 'erro' %}Erro{% elif j.status == 'na_fila' %}Na fila{% else %}Processando{% endif %}</span>
           </div>
           <div class="progress-track"><span class="progress-fill" style="width:{{ j.progress or 0 }}%"></span></div>

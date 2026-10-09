@@ -79,7 +79,7 @@
       top.className = 'job-topline';
       const identity = document.createElement('div');
       addText(identity, 'b', job.title);
-      addText(identity, 'small', job.filename);
+      addText(identity, 'small', `${job.filename} · Perfil ${job.profile_label || 'Equilibrado'}`);
       top.appendChild(identity);
       addText(top, 'span', statusLabel(job.status), 'job-status');
       card.appendChild(top);
