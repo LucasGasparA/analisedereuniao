@@ -75,7 +75,7 @@ async def lifespan(_app):
     start_transcription_worker()
     yield
 
-app = FastAPI(title='Next Fit - Desenvolvimento',lifespan=lifespan)
+app = FastAPI(title='Next Fit - Análise de reuniões',lifespan=lifespan)
 app.mount('/static', StaticFiles(directory=str(ROOT/'static')), name='static')
 app.add_middleware(
     SessionMiddleware,

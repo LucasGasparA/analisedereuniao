@@ -1,4 +1,4 @@
-# Next Fit | Desenvolvimento - versão 2
+# Next Fit | Análise de reuniões
 
 ## Instalação Windows
 1. Extraia o ZIP para uma pasta definitiva. Se já usa a versão anterior, **copie a pasta `data` antiga** para esta nova pasta, com o aplicativo antigo fechado, para manter o banco de dados e sua senha.
