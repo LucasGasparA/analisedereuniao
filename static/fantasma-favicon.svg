@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Fantasminha Next Fit">
+  <rect width="64" height="64" rx="15" fill="#C4A6FF"/>
+  <g transform="matrix(.075 0 0 .075 -5.5 -6.4)" fill="none" stroke="#352048" stroke-width="42" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M 220 755 C 286 659 307 507 326 384 C 348 244 423 192 532 192 C 669 192 733 281 743 410 C 752 526 760 679 778 825"/>
+    <path d="M 220 755 C 288 788 367 669 443 675 C 543 664 578 815 679 817"/>
+  </g>
+  <g transform="matrix(.075 0 0 .075 -5.5 -6.4)" fill="#352048">
+    <ellipse cx="493" cy="476" rx="30" ry="49"/>
+    <ellipse cx="622" cy="476" rx="30" ry="49"/>
+  </g>
+</svg>
