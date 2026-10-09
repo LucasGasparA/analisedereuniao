@@ -6,9 +6,6 @@
 .venv
 venv
 data
-Entrada
-Convertidos
-Transcricoes
 *.db
 *.sqlite*
 *.mp3

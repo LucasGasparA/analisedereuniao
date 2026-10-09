@@ -5,9 +5,6 @@
 
 # Dados privados da aplicação
 data/
-Entrada/
-Convertidos/
-Transcricoes/
 
 # Arquivos de mídia e bancos locais
 *.mp3
