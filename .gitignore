@@ -1,0 +1,54 @@
+# Segredos e configuração local
+.env
+.env.*
+!.env.example
+
+# Dados privados da aplicação
+data/
+Entrada/
+Convertidos/
+Transcricoes/
+
+# Arquivos de mídia e bancos locais
+*.mp3
+*.mp4
+*.m4a
+*.wav
+*.mov
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Logs e temporários
+*.log
+*.tmp
+*.part
+*.part.*
+
+# Python e ambientes virtuais
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Modelos e caches locais
+.cache/
+.huggingface/
+models/
+
+# Editor e sistema operacional
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Artefatos locais do Codex
+.codex-*

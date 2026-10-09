@@ -1,0 +1,26 @@
+{% extends 'base.html' %}
+{% block title %}Entrar | Next Fit Desenvolvimento{% endblock %}
+{% block content %}
+<div class="login-layout">
+  <section class="login-intro">
+    <span class="section-label light">DESENVOLVIMENTO DE PESSOAS</span>
+    <h1>Conversas que viram evolução.</h1>
+    <p>Organize reuniões, preserve evidências e acompanhe o desenvolvimento do time em um só lugar.</p>
+    <div class="login-feature"><span>✓</span> Histórico centralizado</div>
+    <div class="login-feature"><span>✓</span> Transcrição local e segura</div>
+    <div class="login-feature"><span>✓</span> Planos de desenvolvimento com contexto</div>
+  </section>
+  <section class="login-card">
+    <div class="section-label">ACESSO RESTRITO</div>
+    <h2>Boas-vindas</h2>
+    <p class="muted">Entre para acessar o painel do seu time.</p>
+    {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+    <form method="post" action="/login">
+      <input type="hidden" name="token" value="{{ csrf }}">
+      <label>Usuário<input name="username" autocomplete="username" required autofocus></label>
+      <label>Senha<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="button full" type="submit">Entrar no painel</button>
+    </form>
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,106 @@
+{% extends 'base.html' %}
+{% block title %}{{ person.name }} | Next Fit Desenvolvimento{% endblock %}
+{% block content %}
+<a class="back-link" href="/">‹ Voltar ao painel</a>
+
+<section class="person-heading">
+  <span class="avatar large">{{ person.name[:1]|upper }}</span>
+  <div>
+    <div class="section-label">PERFIL DO LIDERADO</div>
+    <h1>{{ person.name }}</h1>
+    <p class="muted">{{ person.role or 'Função não informada' }} · {{ person.team or 'Equipe não informada' }}</p>
+  </div>
+</section>
+
+<div class="person-grid">
+  <div class="main-column">
+    <section class="card upload-card">
+      <div class="card-header">
+        <div><h2>Nova transcrição</h2><p class="muted">Envie uma gravação para gerar o registro da reunião</p></div>
+        <span class="privacy-badge">Processamento local</span>
+      </div>
+      {% if transcribe_enabled %}
+      <form id="media-upload-form" method="post" action="/people/{{ person.id }}/upload-media" enctype="multipart/form-data" data-person-id="{{ person.id }}">
+        <input type="hidden" name="token" value="{{ csrf }}">
+        <div class="form-row">
+          <label>Título da reunião<input name="title" placeholder="Ex.: 1:1 de acompanhamento" required maxlength="200"></label>
+          <label>Data<input name="held_at" type="date" required></label>
+        </div>
+        <label class="file-drop" id="file-drop">
+          <input id="media-file" type="file" name="media" accept=".mp4,.mp3,.m4a,.wav,.mov" required>
+          <span class="upload-icon">↑</span>
+          <span><b>Escolha o vídeo ou áudio</b><small id="file-label">MP4, MP3, M4A, WAV ou MOV{% if max_upload_mb %} · até {{ max_upload_mb }} MB{% else %} · sem limite fixo de tamanho{% endif %}</small></span>
+        </label>
+        <button id="upload-button" class="button" type="submit">Enviar e transcrever</button>
+      </form>
+
+      <div id="upload-feedback" class="upload-feedback" hidden aria-live="polite">
+        <div class="progress-heading"><b id="upload-title">Enviando arquivo</b><span id="upload-percent">0%</span></div>
+        <div class="progress-track"><span id="upload-bar" class="progress-fill" style="width:0%"></span></div>
+        <p id="upload-detail">Mantenha esta página aberta até o envio terminar.</p>
+      </div>
+      {% else %}
+      <div class="alert warning">A transcrição de mídia está desabilitada. Execute <b>INSTALAR_TUDO.bat</b> e depois <b>INICIAR_WINDOWS.bat</b>.</div>
+      {% endif %}
+    </section>
+
+    <section class="card jobs-card" id="jobs-section" data-jobs-url="/people/{{ person.id }}/jobs">
+      <div class="card-header">
+        <div><h2>Andamento das transcrições</h2><p class="muted">A página atualiza o progresso automaticamente</p></div>
+        <span id="live-indicator" class="live-indicator"><i></i> Ao vivo</span>
+      </div>
+      <div id="jobs-list">
+        {% for j in jobs %}
+        <article class="job-card status-{{ j.status }}" data-job-id="{{ j.id }}">
+          <div class="job-topline">
+            <div><b>{{ j.title }}</b><small>{{ j.filename }}</small></div>
+            <span class="job-status">{% if j.status == 'concluido' %}Concluída{% elif j.status == 'erro' %}Erro{% elif j.status == 'na_fila' %}Na fila{% else %}Processando{% endif %}</span>
+          </div>
+          <div class="progress-track"><span class="progress-fill" style="width:{{ j.progress or 0 }}%"></span></div>
+          <div class="job-bottom"><span>{{ j.detail }}</span><b class="job-percent">{{ 'Falhou' if j.status == 'erro' else (j.progress or 0)|string + '%' }}</b></div>
+          <div class="job-actions">
+            {% if j.meeting_id %}
+            <a class="job-link" href="/meetings/{{ j.meeting_id }}">Abrir transcrição ›</a>
+            {% elif j.status == 'erro' and j.retryable %}
+            <button class="retry-button" type="button" data-retry-url="/transcription-jobs/{{ j.id }}/retry">↻ Tentar novamente</button>
+            {% elif j.status == 'erro' %}
+            <button class="reupload-button" type="button">↑ Selecionar arquivo novamente</button>
+            {% endif %}
+          </div>
+        </article>
+        {% else %}
+        <div id="jobs-empty" class="empty-inline">Nenhuma transcrição iniciada para este liderado.</div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <details class="card manual-card">
+      <summary><span><b>Adicionar uma transcrição pronta</b><small>Importe um TXT/MD ou cole o conteúdo manualmente</small></span><span>+</span></summary>
+      <form method="post" action="/people/{{ person.id }}/meetings" enctype="multipart/form-data">
+        <input type="hidden" name="token" value="{{ csrf }}">
+        <div class="form-row">
+          <label>Título<input name="title" placeholder="Ex.: Coletivo 2" required maxlength="200"></label>
+          <label>Data<input name="held_at" type="date" required></label>
+        </div>
+        <label>Arquivo TXT ou MD (até 2 MB)<input type="file" name="transcript_file" accept=".txt,.md"></label>
+        <label>Ou cole a transcrição<textarea name="transcript_text" rows="6" placeholder="[00:00:01] ..."></textarea></label>
+        <button class="button" type="submit">Salvar reunião</button>
+      </form>
+    </details>
+  </div>
+
+  <aside class="side-column">
+    <section class="card history-card">
+      <div class="card-header"><div><h2>Histórico</h2><p class="muted">{{ meetings|length }} reunião{% if meetings|length != 1 %}ões{% endif %}</p></div></div>
+      {% for m in meetings %}
+      <a class="history-row" href="/meetings/{{ m.id }}">
+        <span class="history-dot {% if m.summary %}done{% endif %}"></span>
+        <span><b>{{ m.title }}</b><small>{{ m.held_at }} · {{ 'Análise preenchida' if m.summary else 'Aguardando análise' }}</small></span>
+        <span class="row-arrow">›</span>
+      </a>
+      {% else %}<div class="empty-inline">O histórico aparecerá aqui após a primeira transcrição.</div>{% endfor %}
+    </section>
+    <div class="info-note"><b>Seus dados ficam aqui</b><p>Os arquivos são processados neste computador e removidos ao final. A transcrição permanece no banco local.</p></div>
+  </aside>
+</div>
+{% endblock %}

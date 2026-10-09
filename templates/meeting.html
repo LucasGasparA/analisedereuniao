@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+{% block title %}{{ m.title }} | Next Fit Desenvolvimento{% endblock %}
+{% block content %}
+<a class="back-link" href="/people/{{ m.person_id }}">‹ Voltar para {{ m.person }}</a>
+<section class="page-heading meeting-heading">
+  <div>
+    <div class="section-label">REGISTRO DE REUNIÃO</div>
+    <h1>{{ m.title }}</h1>
+    <p class="muted">{{ m.person }} · {{ m.held_at }}</p>
+  </div>
+  <div class="heading-actions">
+    <a class="button secondary" href="/meetings/{{ m.id }}/transcript">Baixar transcrição</a>
+    <a class="button" href="/meetings/{{ m.id }}/export">Baixar relatório</a>
+  </div>
+</section>
+
+<div class="meeting-grid">
+  <section class="card analysis-card">
+    <div class="card-header"><div><h2>Ficha de desenvolvimento</h2><p class="muted">Registre fatos, evidências e próximos passos</p></div></div>
+    <form method="post" action="/meetings/{{ m.id }}/analysis">
+      <input type="hidden" name="token" value="{{ csrf }}">
+      <label>Resumo da conversa<textarea rows="4" name="summary" placeholder="Principais assuntos e decisões...">{{ m.summary }}</textarea></label>
+      <label>Pontos fortes e evidências<textarea rows="5" name="strengths" placeholder="Comportamentos positivos, com exemplos e horários...">{{ m.strengths }}</textarea></label>
+      <label>Pontos de desenvolvimento<textarea rows="5" name="improvements" placeholder="Oportunidades observadas e seus impactos...">{{ m.improvements }}</textarea></label>
+      <label>Lacunas de conhecimento<textarea rows="4" name="gaps" placeholder="Temas que precisam ser aprofundados...">{{ m.gaps }}</textarea></label>
+      <label>Treinamentos recomendados<textarea rows="4" name="training" placeholder="Ações práticas, conteúdos ou acompanhamentos...">{{ m.training }}</textarea></label>
+      <label>Observações<textarea rows="3" name="notes">{{ m.notes }}</textarea></label>
+      <button class="button" type="submit">Salvar ficha</button>
+    </form>
+  </section>
+  <section class="card transcript-card">
+    <div class="card-header sticky"><div><h2>Transcrição</h2><p class="muted">Registro original com marcações de tempo</p></div><a class="text-link" href="/meetings/{{ m.id }}/transcript">Baixar TXT</a></div>
+    <pre class="transcript">{{ m.transcript }}</pre>
+  </section>
+</div>
+
+<form class="delete-form" method="post" action="/meetings/{{ m.id }}/delete" onsubmit="return confirm('Excluir esta reunião e sua análise?')">
+  <input type="hidden" name="token" value="{{ csrf }}">
+  <button class="danger-link" type="submit">Excluir esta reunião</button>
+</form>
+{% endblock %}

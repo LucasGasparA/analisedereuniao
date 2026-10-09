@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#34004e">
+  <title>{% block title %}Next Fit | Desenvolvimento{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css?v=6">
+  <script src="/static/app.js?v=6" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="shell nav">
+      <a href="/" class="brand" aria-label="Next Fit Desenvolvimento">
+        <img src="/static/nextfit-logo.svg" alt="Next Fit" class="brand-logo">
+        <span class="brand-divider" aria-hidden="true"></span>
+        <span class="product-name">Desenvolvimento</span>
+      </a>
+      {% if logged %}
+      <div class="nav-actions">
+        <span class="environment-dot"><i></i> Ambiente local</span>
+        <form method="post" action="/logout">
+          <input type="hidden" name="token" value="{{ csrf }}">
+          <button class="nav-button" type="submit">Sair</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="shell page-content">{% block content %}{% endblock %}</main>
+
+  <footer class="shell footer">
+    <span>Next Fit · Desenvolvimento de pessoas</span>
+    <span>Uso interno e confidencial</span>
+  </footer>
+</body>
+</html>

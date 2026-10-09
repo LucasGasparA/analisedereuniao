@@ -1,0 +1,72 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <div class="section-label">GESTÃO DE PESSOAS</div>
+    <h1>Desenvolvimento do time</h1>
+    <p class="muted">Reuniões, evidências e próximos passos organizados para você.</p>
+  </div>
+  <a class="button secondary" href="#novo-liderado">+ Novo liderado</a>
+</section>
+
+<div class="stats">
+  <article class="stat-card">
+    <span class="stat-icon purple">P</span>
+    <div><small>Liderados</small><strong>{{ people|length }}</strong><p>Pessoas acompanhadas</p></div>
+  </article>
+  <article class="stat-card">
+    <span class="stat-icon green">R</span>
+    <div><small>Reuniões</small><strong>{{ total }}</strong><p>Registros no histórico</p></div>
+  </article>
+  <article class="stat-card">
+    <span class="stat-icon soft">↗</span>
+    <div><small>Atividade recente</small><strong>{{ meetings|length }}</strong><p>Últimos registros</p></div>
+  </article>
+</div>
+
+<div class="dashboard-grid">
+  <section class="card team-card">
+    <div class="card-header">
+      <div><h2>Seu time</h2><p class="muted">Acesse o histórico individual</p></div>
+      <span class="count-badge">{{ people|length }}</span>
+    </div>
+    {% if people %}
+    <div class="people-list">
+      {% for p in people %}
+      <a class="person-row" href="/people/{{ p.id }}">
+        <span class="avatar">{{ p.name[:1]|upper }}</span>
+        <span class="person-info"><b>{{ p.name }}</b><small>{{ p.role or 'Função não informada' }} · {{ p.team or 'Equipe não informada' }}</small></span>
+        <span class="meeting-count">{{ p.total }} reunião{% if p.total != 1 %}ões{% endif %}</span>
+        <span class="row-arrow">›</span>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state"><span>👋</span><h3>Comece pelo seu time</h3><p>Cadastre o primeiro liderado para organizar as reuniões.</p></div>
+    {% endif %}
+  </section>
+
+  <section class="card create-card" id="novo-liderado">
+    <div class="card-header"><div><h2>Novo liderado</h2><p class="muted">Adicione uma pessoa ao acompanhamento</p></div></div>
+    <form action="/people" method="post">
+      <input type="hidden" name="token" value="{{ csrf }}">
+      <label>Nome completo<input name="name" placeholder="Ex.: Ana Souza" required maxlength="120"></label>
+      <label>Equipe<input name="team" placeholder="Ex.: Sucesso do Cliente" maxlength="120"></label>
+      <label>Função<input name="role" placeholder="Ex.: Analista" maxlength="120"></label>
+      <button class="button full" type="submit">Cadastrar liderado</button>
+    </form>
+  </section>
+</div>
+
+<section class="card recent-card">
+  <div class="card-header"><div><h2>Reuniões recentes</h2><p class="muted">Continue de onde parou</p></div></div>
+  {% for m in meetings %}
+  <a class="meeting-row" href="/meetings/{{ m.id }}">
+    <span class="date-tile"><b>{{ m.held_at[8:10] }}</b><small>{{ m.held_at[5:7] }}/{{ m.held_at[0:4] }}</small></span>
+    <span class="person-info"><b>{{ m.title }}</b><small>{{ m.person }}</small></span>
+    <span class="status-tag {% if m.summary %}done{% endif %}">{{ 'Análise preenchida' if m.summary else 'Aguardando análise' }}</span>
+    <span class="row-arrow">›</span>
+  </a>
+  {% else %}<div class="empty-inline">Nenhuma reunião cadastrada ainda.</div>{% endfor %}
+</section>
+{% endblock %}

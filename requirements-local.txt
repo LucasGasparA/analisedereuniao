@@ -1,0 +1,3 @@
+faster-whisper>=1.1,<2
+# faster-whisper 1.2 ainda usa metadata_errors, removido no PyAV 19.
+av>=11,<19
